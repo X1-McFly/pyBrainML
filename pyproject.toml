@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "brainwave"
+version = "0.2.8"
+description = "Real-time BCI streaming + ML + JSON storage via BrainFlow"
+authors = [
+  { name="Martin McCorkle", email="xmartin.mccorklex@gmail.com" }
+]
+readme = "README.md"
+license = { file="LICENSE" }
+requires-python = ">=3.10"
+dependencies = [
+  "brainflow",
+  "numpy",
+  "scipy",
+  "pandas",
+]
