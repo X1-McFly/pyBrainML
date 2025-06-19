@@ -19,25 +19,55 @@ import numpy as np
 
 VERSION = "0.2.8"
 
-# change to native BrainFlow
+# BrainFlow board compatibility wrapper
 class Boards(Enum):
-    OpenBCI_Ganglion = ("OpenBCI Ganglion", 4, 200)
-    OpenBCI_Cyton = ("OpenBCI Cyton", 8, 250)
-    OpenBCI_Cyton_Daisy = ("OpenBCI Cyton Daisy", 16, 125)
-    BIOCOM_BrainWave1 = ("BIOCOM BrainWave1", 4, 250)
+    """Enumeration of supported boards with BrainFlow metadata."""
 
-    def __init__(self, display_name: str, channels: int, sampling_rate: int):
-        self.display_name = display_name
-        self._channels = channels
-        self._sampling_rate = sampling_rate
+    OpenBCI_Ganglion = BoardIds.GANGLION_BOARD.value
+    OpenBCI_Cyton = BoardIds.CYTON_BOARD.value
+    OpenBCI_Cyton_Daisy = BoardIds.CYTON_DAISY_BOARD.value
+    BIOCOM_BrainWave1 = BoardIds.CALLIBRI_EEG_BOARD.value
+
+    def __init__(self, board_id: int):
+        self.board_id = board_id
+        desc = BoardShim.get_board_descr(board_id)
+        self.display_name = desc.get("name", self.name)
+        self._sampling_rate = desc.get("sampling_rate", 0)
+        self._eeg_channels = desc.get("eeg_channels", [])
+        self._accel_channels = desc.get("accel_channels", [])
+        self._num_rows = desc.get("num_rows", len(self._eeg_channels))
 
     @property
     def channels(self) -> int:
-        return self._channels
+        """Number of EEG channels."""
+        return len(self._eeg_channels)
 
     @property
     def sampling_rate(self) -> int:
         return self._sampling_rate
+
+    @property
+    def eeg_channels(self) -> list[int]:
+        return self._eeg_channels
+
+    @property
+    def accel_channels(self) -> list[int]:
+        return self._accel_channels
+
+    @property
+    def num_rows(self) -> int:
+        return self._num_rows
+
+    def to_dict(self) -> dict:
+        """Return board information suitable for JSON serialization."""
+        return {
+            "name": self.display_name,
+            "board_id": self.board_id,
+            "sampling_rate": self._sampling_rate,
+            "eeg_channels": self._eeg_channels,
+            "accel_channels": self._accel_channels,
+            "num_rows": self._num_rows,
+        }
     
 class ElectrodeType(Enum):
             HYBRID = "Hybrid"
@@ -84,14 +114,21 @@ class Hardware:
 
     board: str | None = None
     channels: int | None = None
-    
+
     sampling_rate: int | None = None
+
+    eeg_channels: list[int] | None = None
+    accel_channels: list[int] | None = None
+    num_rows: int | None = None
 
     def setup(self, electype: ElectrodeType, board_name: Boards):
         self.electrode_type = electype.name
         self.board = board_name.name
         self.channels = board_name.channels
         self.sampling_rate = board_name.sampling_rate
+        self.eeg_channels = board_name.eeg_channels
+        self.accel_channels = board_name.accel_channels
+        self.num_rows = board_name.num_rows
 
     def to_dict(self):
         return asdict(self)
