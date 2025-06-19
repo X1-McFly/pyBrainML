@@ -192,6 +192,18 @@ def start_eeg_stream(board, eeg_channels, timestamp_channel, save=False, foo=Non
         board.stop_stream()
         board.release_session()
 
+def start_file_writer(eeg_fd, q):
+    buffer = []
+    with open(eeg_fd, "a") as f:
+        while True:
+            item = q.get()
+            if item is None:
+                break
+            buffer.append(item)
+            if len(buffer) >= 10:
+                f.writelines(json.dumps(x) + "\n" for x in buffer)
+                buffer.clear()
+
 def get_unique_file(fd):
     base, ext = os.path.splitext(fd)
     final_fd = base + ext
