@@ -3,7 +3,7 @@ requires = ["setuptools>=42", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "brainwave"
+name = "pyBrainML"
 version = "0.2.8"
 description = "Real-time BCI streaming + ML + JSON storage via BrainFlow"
 authors = [
@@ -18,3 +18,9 @@ dependencies = [
   "scipy",
   "pandas",
 ]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
