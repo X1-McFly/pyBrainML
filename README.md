@@ -4,24 +4,24 @@ This repository provides tools for real-time BCI streaming and ML utilities buil
 
 ## Installation
 Clone the repo (https://github.com/X1-McFly/pyBrainML.git):
-'''
+```
 git clone https://github.com/X1-McFly/pyBrainML.git
 cd pyBrainML
-'''
+```
 
 Create a virtual environment:
-'''
+```
 python -m venv env
-'''
+```
 
 Activate the virtual environment:
-'''
-source env/bin/activate <!-- On Windows use `env\Scripts\activate` -->
-'''
+```
+source env/bin/activate # On Windows use `env\Scripts\activate`
+```
 
 Upgrade pip and install dependencies:
-'''
+```
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 pip install -e .
-'''
+```
