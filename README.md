@@ -3,12 +3,25 @@
 This repository provides tools for real-time BCI streaming and ML utilities built on top of [BrainFlow](https://brainflow.org/).
 
 ## Installation
+Clone the repo (https://github.com/X1-McFly/pyBrainML.git):
+'''
+git clone https://github.com/X1-McFly/pyBrainML.git
+cd pyBrainML
+'''
 
-Use the provided setup script to install the project in editable mode:
+Create a virtual environment:
+'''
+python -m venv env
+'''
 
-```bash
-./setup.sh
-```
+Activate the virtual environment:
+'''
+source env/bin/activate <!-- On Windows use `env\Scripts\activate` -->
+'''
 
-After installation the `pyBrainML` package can be imported in Python.
-
+Upgrade pip and install dependencies:
+'''
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+pip install -e .
+'''

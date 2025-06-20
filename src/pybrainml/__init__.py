@@ -184,11 +184,12 @@ def init_ganglion(port: str) -> Tuple[int, int, List[int], int]:
 def start_eeg_stream(
     port: str,
     save_to: Optional[str] = None,
-    callback: Optional[Callable[[Deque[List[float]]], None]] = None
+    callback: Optional[Callable[[Deque[List[float]]], None]] = None,
+    length: Optional[int] = 200,
 ) -> None:
 
     board_id, sampling_rate, eeg_chs, ts_ch = init_ganglion(port)
-    buf: Deque[List[float]] = deque(maxlen=200)
+    buf: Deque[List[float]] = deque(maxlen=length)
     q: queue.Queue = queue.Queue()
     executor = ThreadPoolExecutor(max_workers=1)
 
@@ -232,7 +233,7 @@ def start_eeg_stream(
             q.put(None)
         executor.shutdown(wait=False)
 
-def get_unique_file(fd):
+def get_unique_file(fd) -> str:
     base, ext = os.path.splitext(fd)
     final_fd = base + ext
     counter = 1
@@ -241,7 +242,15 @@ def get_unique_file(fd):
         counter += 1
     return final_fd
 
-def load_ndjson(fd):
+def load_ndjson(fd) -> list[Any]:
     with open(fd, "r") as f:
         entries = [json.loads(line) for line in f if line.strip()]
     return entries
+
+def post_process() -> None:
+    recorded_data = load_ndjson("test.ndjson")
+    # print(recorded_data)
+
+
+
+    return
