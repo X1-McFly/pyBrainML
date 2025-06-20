@@ -6,27 +6,26 @@ from enum import Enum
 import os
 import json
 from collections import deque
-from threading import Thread
 import threading
 import queue
 import multiprocessing as mp
 from dataclasses import dataclass, field, asdict
-from typing import List, Any
+from typing import List, Any, Callable, Deque, List, Optional, Tuple
+from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor
 
 from brainflow.board_shim import BoardShim, BrainFlowInputParams, BoardIds
 import pandas as pd
 import numpy as np
 
-VERSION = "0.2.8"
+VERSION = "0.2.9"
 
-# BrainFlow board compatibility wrapper
 class Boards(Enum):
-    """Enumeration of supported boards with BrainFlow metadata."""
 
     OpenBCI_Ganglion = BoardIds.GANGLION_BOARD.value
     OpenBCI_Cyton = BoardIds.CYTON_BOARD.value
     OpenBCI_Cyton_Daisy = BoardIds.CYTON_DAISY_BOARD.value
-    BIOCOM_BrainWave1 = BoardIds.CALLIBRI_EEG_BOARD.value
+    # BIOCOM_BrainWave1 = BoardIds.CALLIBRI_EEG_BOARD.value
 
     def __init__(self, board_id: int):
         self.board_id = board_id
@@ -39,7 +38,6 @@ class Boards(Enum):
 
     @property
     def channels(self) -> int:
-        """Number of EEG channels."""
         return len(self._eeg_channels)
 
     @property
@@ -59,7 +57,6 @@ class Boards(Enum):
         return self._num_rows
 
     def to_dict(self) -> dict:
-        """Return board information suitable for JSON serialization."""
         return {
             "name": self.display_name,
             "board_id": self.board_id,
@@ -70,9 +67,9 @@ class Boards(Enum):
         }
     
 class ElectrodeType(Enum):
-            HYBRID = "Hybrid"
-            WET = "Wet"
-            DRY = "Dry"
+    HYBRID = "Hybrid"
+    WET = "Wet"
+    DRY = "Dry"
 
 @dataclass
 class Subject:
@@ -117,9 +114,9 @@ class Hardware:
 
     sampling_rate: int | None = None
 
-    eeg_channels: list[int] | None = None
-    accel_channels: list[int] | None = None
-    num_rows: int | None = None
+    # eeg_channels: list[int] | None = None
+    # accel_channels: list[int] | None = None
+    # num_rows: int | None = None
 
     def setup(self, electype: ElectrodeType, board_name: Boards):
         self.electrode_type = electype.name
@@ -159,87 +156,81 @@ def create_experiment():
 
         def to_dict(self):
             return asdict(self)
-
+        
     return Experiment()
 
-def init_ganglion(port):
+@contextmanager
+def ganglion_session(port: str):
     params = BrainFlowInputParams()
     params.serial_port = port
-
     board_id = BoardIds.GANGLION_BOARD.value
     board = BoardShim(board_id, params)
-
-    sampling_rate = BoardShim.get_sampling_rate(board_id)
-    eeg_channels = BoardShim.get_eeg_channels(board_id)
-    timestamp_channel = BoardShim.get_timestamp_channel(board_id)
-    # channel_names = [f"Ch{i+1}" for i in range(len(eeg_channels))]
-
-    return board, sampling_rate, eeg_channels, timestamp_channel
-
-def start_eeg_stream(board, eeg_channels, timestamp_channel, save=False, foo=None):
-    
-    print("Streaming EEG data... Press Ctrl+C to stop.\n")
-    board.prepare_session()
-    board.start_stream()
-    
-    buffer = deque(maxlen=200)
-    q = queue.Queue()
-    writer_thread = None
-
-    buffer1 = np.array(100, dtype=np.float32)
-    buffer2 = np.array(100, dtype=np.float32)
-
-    if save:
-        meta_fd = get_unique_file("data/test_blocks/blocks.json")
-        eeg_fd = get_unique_file("data/test_blocks/eeg.ndjson")
-        print(meta_fd)
-        print(eeg_fd)
-        writer_thread = threading.Thread(target=start_file_writer, args=(eeg_fd, q), daemon=True)
-        writer_thread.start()
-
     try:
-        while True:
-            data = board.get_board_data()
-
-            if data.shape[1] == 0:
-                time.sleep(0.001)
-                continue
-
-            timestamps = pd.to_datetime(data[timestamp_channel], unit='s')
-            eeg_data = data[eeg_channels]
-
-            for i in range(min(len(timestamps), eeg_data.shape[1])):
-                row = [float(eeg_data[ch][i]) for ch in range(len(eeg_channels))]
-                print(f"[{','.join(f'{val:.2f}' for val in row)}]")
-
-                buffer.append(row)
-                if save:
-                    q.put(row)
-                if foo:
-                    t = threading.Thread(target=foo, args=(buffer.copy(),))
-                    t.daemon = True
-                    t.start()
-
-    except KeyboardInterrupt:
-        print("Streaming interrupted.")
+        board.prepare_session()
+        board.start_stream()
+        yield board
     finally:
-        if save and writer_thread is not None:
-            q.put(None)
-            writer_thread.join()
         board.stop_stream()
         board.release_session()
 
-def start_file_writer(eeg_fd, q):
-    buffer = []
-    with open(eeg_fd, "a") as f:
-        while True:
-            item = q.get()
-            if item is None:
-                break
-            buffer.append(item)
-            if len(buffer) >= 10:
-                f.writelines(json.dumps(x) + "\n" for x in buffer)
-                buffer.clear()
+def init_ganglion(port: str) -> Tuple[int, int, List[int], int]:
+    params = BrainFlowInputParams(); params.serial_port = port
+    board_id = BoardIds.GANGLION_BOARD.value
+    sampling_rate = BoardShim.get_sampling_rate(board_id)
+    eeg_channels = BoardShim.get_eeg_channels(board_id)
+    ts_channel = BoardShim.get_timestamp_channel(board_id)
+    return board_id, sampling_rate, eeg_channels, ts_channel
+
+def start_eeg_stream(
+    port: str,
+    save_to: Optional[str] = None,
+    callback: Optional[Callable[[Deque[List[float]]], None]] = None
+) -> None:
+
+    board_id, sampling_rate, eeg_chs, ts_ch = init_ganglion(port)
+    buf: Deque[List[float]] = deque(maxlen=200)
+    q: queue.Queue = queue.Queue()
+    executor = ThreadPoolExecutor(max_workers=1)
+
+    if save_to:
+        def writer():
+            with open(save_to, "a") as f:
+                batch = []
+                while True:
+                    data = q.get()
+                    if data is None:
+                        break
+                    batch.append(data)
+                    if len(batch) >= 10:
+                        f.writelines(json.dumps(r) + "\n" for r in batch)
+                        batch.clear()
+        threading.Thread(target=writer, daemon=True).start()
+
+    print("Streaming EEG... Ctrl+C to stop\n")
+    try:
+        with ganglion_session(port) as board:
+            while True:
+                data = board.get_board_data()
+                if data.shape[1] == 0:
+                    time.sleep(0.001)
+                    continue
+
+                timestamps = pd.to_datetime(data[ts_ch], unit="s")
+                eeg = data[eeg_chs]
+                for i in range(min(len(timestamps), eeg.shape[1])):
+                    sample = [float(eeg[ch][i]) for ch in range(len(eeg_chs))]
+                    print(f"[{', '.join(f'{v:.2f}' for v in sample)}]")
+                    buf.append(sample)
+                    if save_to:
+                        q.put(sample)
+                    if callback:
+                        executor.submit(callback, buf)
+    except KeyboardInterrupt:
+        print("Streaming interrupted.")
+    finally:
+        if save_to:
+            q.put(None)
+        executor.shutdown(wait=False)
 
 def get_unique_file(fd):
     base, ext = os.path.splitext(fd)
@@ -249,3 +240,8 @@ def get_unique_file(fd):
         final_fd = f"{base} ({counter}){ext}"
         counter += 1
     return final_fd
+
+def load_ndjson(fd):
+    with open(fd, "r") as f:
+        entries = [json.loads(line) for line in f if line.strip()]
+    return entries

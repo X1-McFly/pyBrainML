@@ -1,0 +1,23 @@
+{
+    "metadata": {
+        "_version": "0.2.9",
+        "_created_at": "2025-06-20T10:41:53.207582",
+        "_created_by": "MM-Thinkpad",
+        "subject_info": {
+            "name": "c5c68794a23563bf960c18d57e548e1d3a6cb162233d163ff6e19fe159b85104",
+            "age": 21,
+            "sex": "M"
+        },
+        "description": null,
+        "hardware_info": {
+            "electrode_type": "HYBRID",
+            "board": "OpenBCI_Ganglion",
+            "channels": 4,
+            "sampling_rate": 200
+        },
+        "placements": [],
+        "Z": [],
+        "Z_REF": 0.0
+    },
+    "frames": []
+}
