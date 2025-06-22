@@ -100,7 +100,11 @@ class Subject:
 class Frame:
     label: str | None = None
     timestamp: str | None = None
-    eeg_data: List[Any] = field(default_factory=list)
+    eeg_data: List[List[Any]] = field(default_factory=list)
+
+    @classmethod
+    def create(cls, lbl: Optional[str], ts: str, eg: List[Any]):
+        return cls(label=lbl, timestamp=ts, eeg_data=eg)
 
     def to_dict(self):
         return asdict(self)
@@ -160,7 +164,7 @@ def create_experiment():
     return Experiment()
 
 @contextmanager
-def ganglion_session(port: str):
+def board_session(port: str):
     params = BrainFlowInputParams()
     params.serial_port = port
     board_id = BoardIds.GANGLION_BOARD.value
@@ -173,7 +177,7 @@ def ganglion_session(port: str):
         board.stop_stream()
         board.release_session()
 
-def init_ganglion(port: str) -> Tuple[int, int, List[int], int]:
+def init_board(port: str) -> Tuple[int, int, List[int], int]:
     params = BrainFlowInputParams(); params.serial_port = port
     board_id = BoardIds.GANGLION_BOARD.value
     sampling_rate = BoardShim.get_sampling_rate(board_id)
@@ -186,30 +190,20 @@ def start_eeg_stream(
     save_to: Optional[str] = None,
     callback: Optional[Callable[[Deque[List[float]]], None]] = None,
     length: Optional[int] = 200,
-) -> None:
+) -> Deque[List[float]]:
 
-    board_id, sampling_rate, eeg_chs, ts_ch = init_ganglion(port)
+    board_id, sampling_rate, eeg_chs, ts_ch = init_board(port)
     buf: Deque[List[float]] = deque(maxlen=length)
-    q: queue.Queue = queue.Queue()
     executor = ThreadPoolExecutor(max_workers=1)
 
-    if save_to:
-        def writer():
-            with open(save_to, "a") as f:
-                batch = []
-                while True:
-                    data = q.get()
-                    if data is None:
-                        break
-                    batch.append(data)
-                    if len(batch) >= 10:
-                        f.writelines(json.dumps(r) + "\n" for r in batch)
-                        batch.clear()
-        threading.Thread(target=writer, daemon=True).start()
+    mp_queue = mp.Queue() if save_to else None
+    save_proc = mp.Process(target=_save_worker, args=(save_to, mp_queue)) if save_to else None
+    if save_proc:
+        save_proc.start()
 
     print("Streaming EEG... Ctrl+C to stop\n")
     try:
-        with ganglion_session(port) as board:
+        with board_session(port) as board:
             while True:
                 data = board.get_board_data()
                 if data.shape[1] == 0:
@@ -218,20 +212,41 @@ def start_eeg_stream(
 
                 timestamps = pd.to_datetime(data[ts_ch], unit="s")
                 eeg = data[eeg_chs]
+
                 for i in range(min(len(timestamps), eeg.shape[1])):
                     sample = [float(eeg[ch][i]) for ch in range(len(eeg_chs))]
                     print(f"[{', '.join(f'{v:.2f}' for v in sample)}]")
+
                     buf.append(sample)
-                    if save_to:
-                        q.put(sample)
+
+                    if save_to and len(buf) == buf.maxlen and mp_queue:
+                        mp_queue.put(list(buf))
+                        buf.clear()
+
                     if callback:
                         executor.submit(callback, buf)
+
     except KeyboardInterrupt:
         print("Streaming interrupted.")
+
     finally:
-        if save_to:
-            q.put(None)
+        if save_to and mp_queue and save_proc:
+            if buf:
+                mp_queue.put(list(buf))
+            mp_queue.put(None)
+            save_proc.join()
+
         executor.shutdown(wait=False)
+
+    return buf
+
+def _save_worker(save_to, mp_queue):
+    with open(save_to, "a") as f:
+        while True:
+            buf = mp_queue.get()
+            if buf is None:
+                break
+            f.writelines(json.dumps(sample) + "\n" for sample in buf)
 
 def get_unique_file(fd) -> str:
     base, ext = os.path.splitext(fd)
