@@ -1,0 +1,10 @@
+LICENSE
+README.md
+pyproject.toml
+src/pyBrainML.egg-info/PKG-INFO
+src/pyBrainML.egg-info/SOURCES.txt
+src/pyBrainML.egg-info/dependency_links.txt
+src/pyBrainML.egg-info/requires.txt
+src/pyBrainML.egg-info/top_level.txt
+src/pybrainml/__init__.py
+tests/test.py

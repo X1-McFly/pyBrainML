@@ -17,8 +17,11 @@ from concurrent.futures import ThreadPoolExecutor
 from brainflow.board_shim import BoardShim, BrainFlowInputParams, BoardIds
 import pandas as pd
 import numpy as np
+from yaspin import yaspin
 
 VERSION = "0.2.9"
+
+BoardShim.disable_board_logger() 
 
 class Boards(Enum):
 
@@ -197,56 +200,48 @@ def start_eeg_stream(
     executor = ThreadPoolExecutor(max_workers=1)
 
     mp_queue = mp.Queue() if save_to else None
-    save_proc = mp.Process(target=_save_worker, args=(save_to, mp_queue)) if save_to else None
-    if save_proc:
-        save_proc.start()
-
-    print("Streaming EEG... Ctrl+C to stop\n")
+    
     try:
         with board_session(port) as board:
-            while True:
-                data = board.get_board_data()
-                if data.shape[1] == 0:
-                    time.sleep(0.001)
-                    continue
+            print("Streaming EEG... Ctrl+C to stop\n")
+            with yaspin(text="Recording...", color="green") as spinner:
+                while True:
+                    data = board.get_board_data()
+                    if data.shape[1] == 0:
+                        time.sleep(0.001)
+                        continue
 
-                timestamps = pd.to_datetime(data[ts_ch], unit="s")
-                eeg = data[eeg_chs]
+                    timestamps = pd.to_datetime(data[ts_ch], unit="s")
+                    eeg = data[eeg_chs]
 
-                for i in range(min(len(timestamps), eeg.shape[1])):
-                    sample = [float(eeg[ch][i]) for ch in range(len(eeg_chs))]
-                    print(f"[{', '.join(f'{v:.2f}' for v in sample)}]")
+                    for i in range(min(len(timestamps), eeg.shape[1])):
+                        sample = [float(eeg[ch][i]) for ch in range(len(eeg_chs))]
+                        # print(f"[{', '.join(f'{v:.2f}' for v in sample)}]")
 
-                    buf.append(sample)
+                        buf.append(sample)
 
-                    if save_to and len(buf) == buf.maxlen and mp_queue:
-                        mp_queue.put(list(buf))
-                        buf.clear()
+                        if save_to and len(buf) == buf.maxlen and mp_queue:
+                            mp_queue.put(list(buf))
+                            buf.clear()
 
-                    if callback:
-                        executor.submit(callback, buf)
+                        if callback:
+                            executor.submit(callback, buf)
 
     except KeyboardInterrupt:
         print("Streaming interrupted.")
 
     finally:
-        if save_to and mp_queue and save_proc:
-            if buf:
-                mp_queue.put(list(buf))
-            mp_queue.put(None)
-            save_proc.join()
-
         executor.shutdown(wait=False)
 
     return buf
 
-def _save_worker(save_to, mp_queue):
-    with open(save_to, "a") as f:
-        while True:
-            buf = mp_queue.get()
-            if buf is None:
-                break
-            f.writelines(json.dumps(sample) + "\n" for sample in buf)
+# def _save_worker(save_to, mp_queue):
+#     with open(save_to, "a") as f:
+#         while True:
+#             buf = mp_queue.get()
+#             if buf is None:
+#                 break
+#             f.writelines(json.dumps(sample) + "\n" for sample in buf)
 
 def get_unique_file(fd) -> str:
     base, ext = os.path.splitext(fd)
