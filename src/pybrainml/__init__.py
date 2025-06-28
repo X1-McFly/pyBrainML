@@ -8,7 +8,7 @@ import json
 from collections import deque
 import threading
 import queue
-import multiprocessing as mp
+from multiprocessing import Process, Queue
 from dataclasses import dataclass, field, asdict
 from typing import List, Any, Callable, Deque, List, Optional, Tuple
 from contextlib import contextmanager
@@ -192,56 +192,77 @@ def start_eeg_stream(
     port: str,
     save_to: Optional[str] = None,
     callback: Optional[Callable[[Deque[List[float]]], None]] = None,
-    length: Optional[int] = 200,
+    length: int = 200,
 ) -> Deque[List[float]]:
 
     board_id, sampling_rate, eeg_chs, ts_ch = init_board(port)
-    buf: Deque[List[float]] = deque(maxlen=length)
-    executor = ThreadPoolExecutor(max_workers=1)
+    buf: Deque[List[float]] = deque()
+    infer_executor = ProcessPoolExecutor(max_workers=1)
 
-    mp_queue = mp.Queue() if save_to else None
-    
+    # initialize saver variables
+    save_q: Optional[Queue]    = None
+    save_proc: Optional[Process] = None
+    buf_a, buf_b, active_buf = None, None, None
+    max_buf_size = 0
+
+    if save_to:
+        buf_a, buf_b = [], []
+        active_buf = buf_a
+        max_buf_size = length * 25  # e.g. batch 25 windows
+        save_q = Queue()
+        save_proc = Process(target=_save_worker, args=(save_to, save_q), daemon=True)
+        save_proc.start()
+
     try:
         with board_session(port) as board:
-            print("Streaming EEG... Ctrl+C to stop\n")
-            with yaspin(text="Recording...", color="green") as spinner:
-                while True:
-                    data = board.get_board_data()
-                    if data.shape[1] == 0:
-                        time.sleep(0.001)
-                        continue
+            print(f"Board {board_id} started streaming on port {port}")
+            while True:
+                data = board.get_board_data()
+                if data.shape[1] == 0:
+                    time.sleep(0.001)
+                    continue
 
-                    timestamps = pd.to_datetime(data[ts_ch], unit="s")
-                    eeg = data[eeg_chs]
+                timestamps = pd.to_datetime(data[ts_ch], unit="ms")
+                eeg_data   = data[eeg_chs]
 
-                    for i in range(min(len(timestamps), eeg.shape[1])):
-                        sample = [float(eeg[ch][i]) for ch in range(len(eeg_chs))]
-                        # print(f"[{', '.join(f'{v:.2f}' for v in sample)}]")
+                for i in range(eeg_data.shape[1]):
+                    sample = [float(eeg_data[ch][i]) for ch in range(len(eeg_chs))]
 
-                        buf.append(sample)
+                        if len(buf) >= length:
+                        oldest = buf.popleft()
+                        if save_q:
+                            active_buf.append(oldest)
+                            if len(active_buf) >= max_buf_size:
+                                save_q.put(active_buf.copy())
+                                active_buf.clear()
+                                active_buf = buf_b if active_buf is buf_a else buf_a
+                    buf.append(sample)
 
-                        if save_to and len(buf) == buf.maxlen and mp_queue:
-                            mp_queue.put(list(buf))
-                            buf.clear()
-
-                        if callback:
-                            executor.submit(callback, buf)
+                    if callback:
+                        infer_executor.submit(callback, buf.copy())
 
     except KeyboardInterrupt:
-        print("Streaming interrupted.")
+        print("Streaming interrupted by user")
 
     finally:
-        executor.shutdown(wait=False)
+        if save_q:
+            if active_buf:
+                save_q.put(active_buf.copy())
+            save_q.put(None)
+            save_proc.join()
+
+        infer_executor.shutdown(wait=False)
 
     return buf
 
-# def _save_worker(save_to, mp_queue):
-#     with open(save_to, "a") as f:
-#         while True:
-#             buf = mp_queue.get()
-#             if buf is None:
-#                 break
-#             f.writelines(json.dumps(sample) + "\n" for sample in buf)
+def _save_worker(path: str, q: Queue):
+    with open(path, "a") as f:
+        while True:
+            batch = q.get()
+            if batch is None:
+                break
+            for item in batch:
+                f.write(json.dumps(item) + "\n")
 
 def get_unique_file(fd) -> str:
     base, ext = os.path.splitext(fd)
