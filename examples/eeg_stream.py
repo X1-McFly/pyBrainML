@@ -25,24 +25,25 @@ import matplotlib.pyplot as plt
 
 import pybrainml as bml
 from pybrainml import ElectrodeType, Boards, Frame
+import os
 
 
 def main():
     port = "COM8"
-    window_length = 200  # must match `length` in start_eeg_stream
+    window_length = 200
 
     # Build experiment metadata
     exp = bml.create_experiment()
     exp.metadata.subject_info.setup("John Doe", 35, "F")
     exp.metadata.hardware_info.setup(ElectrodeType.HYBRID, Boards.OpenBCI_Ganglion)
 
-    # Start streaming in background; data saved to out.ndjson
+    # Start streaming in background
     temp_f = "eeg.ndjson"
     session = bml.start_eeg_stream(port=port, save_to=temp_f, length=window_length)
-    print(f"Streaming started on {port}")
+    print(f"Streaming started on {port}...")
 
     # Determine number of EEG channels
-    _, sampling_rate, eeg_chs, _ = bml.init_board(port)
+    _, sampling_rate, eeg_chs = bml.init_board(port)
     num_ch = len(eeg_chs)
 
     # Prepare real-time plot
@@ -82,16 +83,26 @@ def main():
         print("Stopping session...")
 
     finally:
-        filename = "test.json"
+        session.stop()
+        
+        filename = bml.get_unique_file("test.json")
         # Persist experiment metadata
         processed_frame = bml.post_process(temp_f)
+        # time.sleep(1)
+        if os.path.exists(temp_f):
+            os.remove(temp_f)
         if processed_frame is not None:
+            print(f"Saving processed frame to {filename}...")
             exp.frames.append(processed_frame)
-        with open(filename, "w") as f:
-            json.dump(exp.to_dict(), f, indent=4)
+            with open(filename, "w") as f:
+                json.dump(exp.to_dict(), f, indent=4)
+        else:
+            print("No processed frame to save.")
+        
         plt.ioff()
         plt.close()
-        print(f"Session stopped. Data saved to {filename}.")
+        print(f"Done.")
+    return
 
 if __name__ == "__main__":
     main()

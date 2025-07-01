@@ -17,9 +17,9 @@ from contextlib import contextmanager
 from brainflow.board_shim import BoardShim, BrainFlowInputParams, BoardIds
 # import pandas as pd
 # import numpy as np
-from yaspin import yaspin
+# from yaspin import yaspin
 
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 
 BoardShim.disable_board_logger() 
 
@@ -106,8 +106,8 @@ class Frame:
     eeg_data: List[List[Any]] = field(default_factory=list)
 
     @classmethod
-    def create(cls, lbl: Optional[str], ts: str, eg: List[Any]):
-        return cls(label=lbl, timestamp=ts, eeg_data=eg)
+    def create(cls, lbl: Optional[str], eg: List[Any]):
+        return cls(label=lbl, eeg_data=eg)
 
     def to_dict(self):
         return asdict(self)
@@ -115,15 +115,9 @@ class Frame:
 @dataclass  
 class Hardware:
     electrode_type: str | None = None
-
     board: str | None = None
     channels: int | None = None
-
     sampling_rate: int | None = None
-
-    # eeg_channels: list[int] | None = None
-    # accel_channels: list[int] | None = None
-    # num_rows: int | None = None
 
     def setup(self, electype: ElectrodeType, board_name: Boards):
         self.electrode_type = electype.name
@@ -180,13 +174,13 @@ def board_session(port: str):
         board.stop_stream()
         board.release_session()
 
-def init_board(port: str) -> Tuple[int, int, List[int], int]:
+def init_board(port: str) -> Tuple[int, int, List[int]]:
     params = BrainFlowInputParams(); params.serial_port = port
     board_id = BoardIds.GANGLION_BOARD.value
     sampling_rate = BoardShim.get_sampling_rate(board_id)
     eeg_channels = BoardShim.get_eeg_channels(board_id)
-    ts_channel = BoardShim.get_timestamp_channel(board_id)
-    return board_id, sampling_rate, eeg_channels, ts_channel
+    # ts_channel = BoardShim.get_timestamp_channel(board_id)
+    return board_id, sampling_rate, eeg_channels
 
 def _save_worker(path: str, q: Queue):
     with open(path, "a", buffering=1) as f:
@@ -207,9 +201,10 @@ def start_eeg_stream(
     """
     Streams EEG data from the board. Maintains a sliding window of the most recent EEG data (deque of size `length`).
     If `save_to` is provided, uses two alternating buffers to batch-save data to disk efficiently in a background thread.
-    Returns a handle with a `get_buffer()` method to access the current sliding window.
+    Returns a handle with a `get_buffer()` and `stop()` method.
     """
-    board_id, sampling_rate, eeg_chs, ts_ch = init_board(port)
+    from threading import Event
+    board_id, sampling_rate, eeg_chs = init_board(port)
     buf: Deque[List[float | str]] = deque(maxlen=length)
 
     save_q: Optional[Queue] = None
@@ -217,6 +212,7 @@ def start_eeg_stream(
     buffers = [[], []]
     active_idx = 0
     max_buf_size = length
+    stop_event = Event()
 
     if save_to:
         save_q = Queue()
@@ -236,23 +232,23 @@ def start_eeg_stream(
     def _run_stream():
         try:
             with board_session(port) as board:
-                # print(f"Starting Experiment on {port}")
-                with yaspin(text="Streaming EEG data...", color="green"):
-                    while True:
-                        data = board.get_board_data()
-                        if data.shape[1] == 0:
-                            time.sleep(0.001)
-                            continue
-                        eeg_data = data[eeg_chs]
-                        for i in range(eeg_data.shape[1]):
-                            sample = [datetime.now().isoformat()] + [
-                                float(eeg_data[ch][i]) for ch in range(len(eeg_chs))
-                            ]
-                            buf.append(sample)
-                            if save_to:
-                                save_sample(sample)
-                            if callback:
-                                callback(buf.copy())
+                while not stop_event.is_set():
+                    data = board.get_board_data()
+                    if data.shape[1] == 0:
+                        time.sleep(0.001)
+                        continue
+                    eeg_data = data[eeg_chs]
+                    for i in range(eeg_data.shape[1]):
+                        if stop_event.is_set():
+                            break
+                        sample = [datetime.now().isoformat()] + [
+                            float(eeg_data[ch][i]) for ch in range(len(eeg_chs))
+                        ]
+                        buf.append(sample)
+                        if save_to:
+                            save_sample(sample)
+                        if callback:
+                            callback(buf.copy())
         finally:
             if save_to and save_q:
                 for b in buffers:
@@ -262,7 +258,6 @@ def start_eeg_stream(
                 if save_thread:
                     save_thread.join()
 
-    # start the streaming thread non-blocking
     stream_thread = Thread(target=_run_stream, daemon=True)
     stream_thread.start()
 
@@ -271,6 +266,12 @@ def start_eeg_stream(
         def get_buffer() -> Deque[List[float | str]]:
             snapshot = buf.copy()
             return deque(item.copy() for item in snapshot)
+        
+        @staticmethod
+        def stop():
+            stop_event.set()
+            if save_to and save_q:
+                save_q.put(None)
 
     return Handle()
 
@@ -279,12 +280,9 @@ def get_unique_file(fd) -> str:
     final_fd = base + ext
     counter = 1
     while os.path.exists(final_fd):
-        final_fd = f"{base} ({counter}){ext}"
+        final_fd = f"{base}({counter}){ext}"
         counter += 1
     return final_fd
-
-# def load_ndjson(fd) -> list[Any]:
-    
 
 def post_process(fd) -> Frame | None:
     with open(fd, "r") as f:
@@ -297,5 +295,10 @@ def post_process(fd) -> Frame | None:
         timestamp=entries[0][0] if entries else None,
         eeg_data=[entry[1:] for entry in entries],
     )
+    frame = Frame(
+        label=None,
+        timestamp=entries[0][0] if entries else None,
+        eeg_data=[[entry[0]] + entry[1:] for entry in entries],
+    )
     return frame
-    
+
