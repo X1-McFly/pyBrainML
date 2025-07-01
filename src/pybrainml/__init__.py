@@ -241,9 +241,7 @@ def start_eeg_stream(
                     for i in range(eeg_data.shape[1]):
                         if stop_event.is_set():
                             break
-                        sample = [datetime.now().isoformat()] + [
-                            float(eeg_data[ch][i]) for ch in range(len(eeg_chs))
-                        ]
+                        sample = [datetime.now().isoformat()] + [float(eeg_data[ch][i]) for ch in range(len(eeg_chs))]
                         buf.append(sample)
                         if save_to:
                             save_sample(sample)
