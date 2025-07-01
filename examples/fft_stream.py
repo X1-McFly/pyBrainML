@@ -49,7 +49,7 @@ def main():
     print(f"Streaming started on {port}")
 
     # Determine sampling rate and EEG channels
-    _, sampling_rate, eeg_chs, _ = bml.init_board(port)
+    _, sampling_rate, eeg_chs = bml.init_board(port)
     num_ch = len(eeg_chs)
 
     # Prepare real‐time plots: raw EEG and gamma‐band power
