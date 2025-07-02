@@ -27,7 +27,6 @@ import pybrainml as bml
 from pybrainml import ElectrodeType, Boards, Frame
 import os
 
-
 def main():
     port = "COM8"
     window_length = 200
@@ -39,7 +38,7 @@ def main():
 
     # Start streaming in background
     temp_f = "eeg.ndjson"
-    session = bml.start_eeg_stream(port=port, save_to=temp_f, length=window_length)
+    session = bml.exg_stream(port=port, save_to=temp_f, length=window_length)
     print(f"Streaming started on {port}...")
 
     # Determine number of EEG channels
@@ -51,9 +50,13 @@ def main():
     fig, ax = plt.subplots()
     lines = [ax.plot([], [], label=f"Chan {i+1}")[0] for i in range(num_ch)]
     ax.set_xlabel("Sample Index")
-    ax.set_ylabel("EEG Value")
+    ax.set_ylabel("EXG Value")
     ax.set_xlim(0, window_length)
     ax.legend().set_visible(False)
+
+    tic = time.time()
+
+    session.start()
 
     try:
         while True:
@@ -84,13 +87,12 @@ def main():
 
     finally:
         session.stop()
+
+        toc = time.time()
         
         filename = bml.get_unique_file("test.json")
-        # Persist experiment metadata
         processed_frame = bml.post_process(temp_f)
-        # time.sleep(1)
-        if os.path.exists(temp_f):
-            os.remove(temp_f)
+
         if processed_frame is not None:
             print(f"Saving processed frame to {filename}...")
             exp.frames.append(processed_frame)
@@ -101,7 +103,8 @@ def main():
         
         plt.ioff()
         plt.close()
-        print(f"Done.")
+
+        print(f"Done. {toc - tic:.2f} seconds elapsed.")
     return
 
 if __name__ == "__main__":

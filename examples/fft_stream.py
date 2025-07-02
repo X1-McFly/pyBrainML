@@ -45,7 +45,7 @@ def main():
     exp.metadata.hardware_info.setup(ElectrodeType.HYBRID, Boards.OpenBCI_Ganglion)
 
     # Start streaming in background; data saved to out.ndjson
-    session = bml.start_eeg_stream(port=port, save_to="out.ndjson", length=window_length)
+    session = bml.exg_stream(port=port, save_to="out.ndjson", length=window_length)
     print(f"Streaming started on {port}")
 
     # Determine sampling rate and EEG channels

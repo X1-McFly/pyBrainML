@@ -192,7 +192,7 @@ def _save_worker(path: str, q: Queue):
                 f.write(json.dumps(item) + "\n")
             f.flush()
 
-def start_eeg_stream(
+def exg_stream(
     port: str,
     save_to: Optional[str] = None,
     callback: Optional[Callable[[Deque[List[float | str]]], None]] = None,
@@ -257,9 +257,13 @@ def start_eeg_stream(
                     save_thread.join()
 
     stream_thread = Thread(target=_run_stream, daemon=True)
-    stream_thread.start()
 
     class Handle:
+        @staticmethod
+        def start():
+            if not stream_thread.is_alive():
+                stream_thread.start()
+        
         @staticmethod
         def get_buffer() -> Deque[List[float | str]]:
             snapshot = buf.copy()
@@ -288,11 +292,8 @@ def post_process(fd) -> Frame | None:
     if not entries:
         print(f"No valid entries found in {fd}")
         return
-    frame = Frame(
-        label=None,
-        timestamp=entries[0][0] if entries else None,
-        eeg_data=[entry[1:] for entry in entries],
-    )
+    if os.path.exists(fd):
+            os.remove(fd)
     frame = Frame(
         label=None,
         timestamp=entries[0][0] if entries else None,
