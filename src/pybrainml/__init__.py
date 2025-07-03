@@ -7,6 +7,7 @@ import os
 import json
 from collections import deque
 from threading import Thread
+import uuid
 # import queue
 from multiprocessing import Process, Queue
 from dataclasses import dataclass, field, asdict
@@ -123,7 +124,7 @@ class Hardware:
         self.electrode_type = electype.name
         self.board = board_name.name
         self.channels = board_name.channels
-        self.sampling_rate = board_name.sampling_rate
+        self.sampling_rate = BoardShim.get_sampling_rate(board_name.board_id)
         self.eeg_channels = board_name.eeg_channels
         self.accel_channels = board_name.accel_channels
         self.num_rows = board_name.num_rows
@@ -149,6 +150,7 @@ def create_experiment():
 
         def to_dict(self):
             return asdict(self)
+        
 
     @dataclass
     class Experiment:
@@ -157,6 +159,14 @@ def create_experiment():
 
         def to_dict(self):
             return asdict(self)
+        
+        @staticmethod
+        def user_setup(name: str, age: Optional[int], sex: Optional[str]):
+            subject_info = Subject(name, age, sex)
+
+        @staticmethod
+        def hardware_setup(electrode_type: ElectrodeType, board_name: Boards):
+            hardware_info = Hardware(electrode_type.value, board_name.value, board_name.channels, board_name.sampling_rate)
         
     return Experiment()
 
@@ -195,7 +205,6 @@ def connect_board(port: str, board_id: Boards, max_retries: int = 3) -> BoardShi
     def check_connection():
         pass
 
-    
     # ts_channel = BoardShim.get_timestamp_channel(board_id)
     return board_fd
 
@@ -295,7 +304,7 @@ def exg_stream(
 
     class Handle:
         @staticmethod
-        def start():
+        def start() -> None:
             if not stream_thread.is_alive():
                 stream_thread.start()
         
@@ -305,7 +314,7 @@ def exg_stream(
             return deque(item.copy() for item in snapshot)
         
         @staticmethod
-        def stop():
+        def stop() -> None:
             stop_event.set()
             if save_q:
                 save_q.put(None)

@@ -4,7 +4,7 @@
 EEG Streaming, Real-Time Plotting, and Gamma-Band Power Extraction Example
 
 Author: Martin McCorkle
-Date: 2025-06-30
+Date: 2025-07-03
 Description:
     Streams EEG data from a BrainFlow-compatible board using pybrainml,
     saves raw data to an NDJSON file, plots all EEG channels in real time,
@@ -25,6 +25,7 @@ import json
 from collections import deque
 from datetime import datetime
 from typing import Deque, List, Optional
+import os
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -36,27 +37,27 @@ from pybrainml import ElectrodeType, Boards, Frame
 
 
 def main():
+    
+    #Experiment setup
     port = "COM8"
-    window_length = 200  # sliding‐window size
+    data_dir = "data"
+    window_length = 200
 
-    # Build experiment metadata
     exp = bml.create_experiment()
-    exp.metadata.subject_info.setup("John Doe", 35, "F")
-    exp.metadata.hardware_info.setup(ElectrodeType.HYBRID, Boards.OpenBCI_Ganglion)
+    exp.user_setup("John Doe", 35, "F")
+    exp.hardware_setup(ElectrodeType.HYBRID, Boards.OpenBCI_Ganglion)
 
-    # Start streaming in background; data saved to out.ndjson
-    session = bml.exg_stream(port=port, save_to="out.ndjson", length=window_length)
-    print(f"Streaming started on {port}")
 
-    # Determine sampling rate and EEG channels
-    _, sampling_rate, eeg_chs = bml.init_board(port)
-    num_ch = len(eeg_chs)
+    # Connect to board and prepare streaming session
+    board_fd = bml.connect_board(port, Boards.OpenBCI_Ganglion)
+    session = bml.exg_stream(board_fd, length=window_length)
 
     # Prepare real‐time plots: raw EEG and gamma‐band power
     plt.ion()
     fig, (ax_raw, ax_gamma) = plt.subplots(2, 1, sharex=True, figsize=(10, 8))
 
     # Raw EEG plot
+    num_ch = len(session.eeg_channels())
     raw_lines = [ax_raw.plot([], [])[0] for _ in range(num_ch)]
     ax_raw.set_title("EEG Channels")
     ax_raw.set_ylabel("Amplitude")
@@ -74,7 +75,16 @@ def main():
     # Buffer for gamma‐power time series
     gamma_buf: Deque[float] = deque(maxlen=window_length)
 
+    # Start experiment
+    session.start()
+
     try:
+        # sampling_rate = exp.metadata.hardware_info.sampling_rate
+        sampling_rate = 200
+        if sampling_rate is None:
+            raise ValueError("Sampling rate is None; cannot proceed.")
+        sampling_rate = float(sampling_rate)
+
         while True:
             time.sleep(0.1)
             buf: Deque[List[float | str]] = session.get_buffer()
@@ -115,17 +125,29 @@ def main():
             fig.canvas.draw()
             fig.canvas.flush_events()
 
+            if not session.is_running():
+                break
+
     except KeyboardInterrupt:
-        print("Stopping session…")
+        pass
 
     finally:
-        # Persist experiment metadata
-        with open("test.json", "w") as f:
-            json.dump(exp.to_dict(), f, indent=4)
+        print("Stopping session...")
+        session.stop()
+        
+        filename = os.path.join(data_dir, bml.get_unique_file(data_dir, "test.json"))
+        processed_frame = session.get_final()
+        if processed_frame is not None:
+            print(f"Saving processed frame to {filename}...")
+            exp.frames.append(processed_frame)
+            with open(filename, "w") as f:
+                json.dump(exp.to_dict(), f, indent=4)
+        else:
+            print("No processed frame to save.")
+        
         plt.ioff()
         plt.close()
-        print("Session stopped; metadata saved to test.json")
-
+    return
 
 if __name__ == "__main__":
     main()

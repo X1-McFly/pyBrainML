@@ -2,7 +2,7 @@
 EXG Streaming and Real-Time Plotting Example
 
 Author: Martin McCorkle
-Date: 2025-07-02
+Date: 2025-07-03
 Description:
     Demonstrates how to stream EXG data from a BrainFlow-compatible board using
     the pybrainml library, save raw data to an NDJSON file, and plot all EXG
@@ -27,14 +27,15 @@ import pybrainml as bml
 from pybrainml import ElectrodeType, Boards
 
 def main():
+
     #Experiment setup
     port = "COM8"
     data_dir = "data"
     window_length = 200
 
     exp = bml.create_experiment()
-    exp.metadata.subject_info.setup("John Doe", 35, "F")
-    exp.metadata.hardware_info.setup(ElectrodeType.HYBRID, Boards.OpenBCI_Ganglion)
+    exp.user_setup("John Doe", 35, "F")
+    exp.hardware_setup(ElectrodeType.HYBRID, Boards.OpenBCI_Ganglion)
 
 
     # Connect to board and prepare streaming session
