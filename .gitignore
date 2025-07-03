@@ -2,3 +2,4 @@
 *.ndjson
 test*
 /env/
+src/pyBrainML.egg-info/

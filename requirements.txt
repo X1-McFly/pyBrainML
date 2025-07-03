@@ -1,0 +1,7 @@
+numpy
+scipy
+pandas
+elasticsearch<9.0.0
+dotenv
+yaspin
+matplotlib
