@@ -17,9 +17,9 @@ from contextlib import contextmanager
 from brainflow.board_shim import BoardShim, BrainFlowInputParams, BoardIds
 # import pandas as pd
 # import numpy as np
-# from yaspin import yaspin
+from yaspin import yaspin
 
-VERSION = "0.3.1"
+VERSION = "0.3.2"
 
 BoardShim.disable_board_logger() 
 
@@ -160,29 +160,66 @@ def create_experiment():
         
     return Experiment()
 
-@contextmanager
-def board_session(port: str):
-    params = BrainFlowInputParams()
-    params.serial_port = port
-    board_id = BoardIds.GANGLION_BOARD.value
-    board = BoardShim(board_id, params)
-    try:
-        board.prepare_session()
-        board.start_stream()
-        yield board
-    finally:
-        board.stop_stream()
-        board.release_session()
+  
+def connect_board(port: str, board_id: Boards, max_retries: int = 3) -> BoardShim:
 
-def init_board(port: str) -> Tuple[int, int, List[int]]:
-    params = BrainFlowInputParams(); params.serial_port = port
-    board_id = BoardIds.GANGLION_BOARD.value
-    sampling_rate = BoardShim.get_sampling_rate(board_id)
-    eeg_channels = BoardShim.get_eeg_channels(board_id)
+    params = BrainFlowInputParams()
+    params.serial_port = port   
+    board_fd = BoardShim(board_id.value, params)
+
+    def attempt_connect():
+        try:
+            board_fd.prepare_session()
+            board_fd.release_session()
+            return True
+        except Exception:
+            return False
+
+    os.system('cls' if os.name == 'nt' else 'clear')
+    with yaspin(text="Connecting to board...", color="green") as spinner:
+        for attempt in range(1, max_retries + 1):
+            if attempt_connect():
+                spinner.text = ""
+                spinner.color = "green"
+                spinner.ok("Connected")
+                break
+            elif attempt < max_retries:
+                spinner.text = f"Attempt {attempt}/{max_retries} failed..."
+                spinner.color = "yellow"
+            else:
+                spinner.text = ""
+                spinner.color = "red"
+                spinner.fail("Connection failed")
+
+    @staticmethod
+    def check_connection():
+        pass
+
+    
     # ts_channel = BoardShim.get_timestamp_channel(board_id)
-    return board_id, sampling_rate, eeg_channels
+    return board_fd
+
+@contextmanager
+def board_session(board_fd: BoardShim):
+    try:
+        board_fd.prepare_session()
+        board_fd.start_stream()
+        yield board_fd
+    finally:
+        board_fd.stop_stream()
+        board_fd.release_session()
+
+# def init_board(port: str) -> Tuple[int, int, List[int]]:
+#     params = BrainFlowInputParams(); params.serial_port = port
+#     board_id = BoardIds.GANGLION_BOARD.value
+#     sampling_rate = BoardShim.get_sampling_rate(board_id)
+#     eeg_channels = BoardShim.get_eeg_channels(board_id)
+#     # ts_channel = BoardShim.get_timestamp_channel(board_id)
+#     return board_id, sampling_rate, eeg_channels
 
 def _save_worker(path: str, q: Queue):
+    if os.path.exists(path):
+        os.remove(path)
     with open(path, "a", buffering=1) as f:
         while True:
             batch = q.get()
@@ -193,31 +230,32 @@ def _save_worker(path: str, q: Queue):
             f.flush()
 
 def exg_stream(
-    port: str,
-    save_to: Optional[str] = None,
-    callback: Optional[Callable[[Deque[List[float | str]]], None]] = None,
+    # port: str,
+    # save_to: Optional[str] = None,
+    # callback: Optional[Callable[[Deque[List[float | str]]], None]] = None,
+    board_fd: BoardShim,
     length: int = 200,
+    duration: Optional[float] = None,
 ):
     """
     Streams EEG data from the board. Maintains a sliding window of the most recent EEG data (deque of size `length`).
-    If `save_to` is provided, uses two alternating buffers to batch-save data to disk efficiently in a background thread.
+    The program uses two alternating buffers to batch-save data to disk efficiently in a background thread.
     Returns a handle with a `get_buffer()` and `stop()` method.
     """
     from threading import Event
-    board_id, sampling_rate, eeg_chs = init_board(port)
-    buf: Deque[List[float | str]] = deque(maxlen=length)
 
-    save_q: Optional[Queue] = None
-    save_thread: Optional[Thread] = None
+    temp_f = os.path.join(os.getcwd(), "data", "temp.ndjson")
+    
+    # board_fd, sampling_rate, eeg_chs = connect_board(port, Boards.OpenBCI_Ganglion.value)
+    buf: Deque[List[float | str]] = deque(maxlen=length)
     buffers = [[], []]
     active_idx = 0
     max_buf_size = length
     stop_event = Event()
 
-    if save_to:
-        save_q = Queue()
-        save_thread = Thread(target=_save_worker, args=(save_to, save_q), daemon=True)
-        save_thread.start()
+    save_q = Queue()
+    save_thread = Thread(target=_save_worker, args=(temp_f, save_q), daemon=True)
+    save_thread.start()
 
     def save_sample(sample):
         nonlocal active_idx
@@ -230,25 +268,22 @@ def exg_stream(
             active_idx = 1 - active_idx
 
     def _run_stream():
+        eeg_chs = BoardShim.get_eeg_channels(board_fd.board_id)
         try:
-            with board_session(port) as board:
-                while not stop_event.is_set():
+            with board_session(board_fd) as board:
+                start_time = time.time()
+                while not stop_event.is_set() and (duration is None or time.time() - start_time < duration):
                     data = board.get_board_data()
                     if data.shape[1] == 0:
                         time.sleep(0.001)
                         continue
                     eeg_data = data[eeg_chs]
                     for i in range(eeg_data.shape[1]):
-                        if stop_event.is_set():
-                            break
                         sample = [datetime.now().isoformat()] + [float(eeg_data[ch][i]) for ch in range(len(eeg_chs))]
                         buf.append(sample)
-                        if save_to:
-                            save_sample(sample)
-                        if callback:
-                            callback(buf.copy())
+                        save_sample(sample)
         finally:
-            if save_to and save_q:
+            if save_q:
                 for b in buffers:
                     if b:
                         save_q.put(b)
@@ -272,16 +307,32 @@ def exg_stream(
         @staticmethod
         def stop():
             stop_event.set()
-            if save_to and save_q:
+            if save_q:
                 save_q.put(None)
+
+        @staticmethod
+        def is_running() -> bool:
+            return stream_thread.is_alive()
+        
+        # remove later
+        @staticmethod
+        def eeg_channels() -> List[int]:
+            return BoardShim.get_eeg_channels(board_fd.board_id)
+        
+        @staticmethod
+        def get_final():
+            return post_process(temp_f)
+        
+        # @staticmethod
+        # def post_process()
 
     return Handle()
 
-def get_unique_file(fd) -> str:
+def get_unique_file(dir, fd) -> str:
     base, ext = os.path.splitext(fd)
     final_fd = base + ext
     counter = 1
-    while os.path.exists(final_fd):
+    while os.path.exists(os.path.join(dir, final_fd)):
         final_fd = f"{base}({counter}){ext}"
         counter += 1
     return final_fd
@@ -301,3 +352,71 @@ def post_process(fd) -> Frame | None:
     )
     return frame
 
+@dataclass
+class placements:
+    C1: str = "C1"
+    # C2: str = "C2"
+    # C3: str = "C3"
+    # C4: str = "C4"
+    # C5: str = "C5"
+
+# def plot(buf: Deque[List[float | str]]):
+#     import matplotlib.pyplot as plt
+
+#     if not buf:
+#         return
+
+#     num_ch = len(buf[0]) - 1  # Exclude timestamp
+#     x = list(range(len(buf)))
+
+#     fig, ax = plt.subplots()
+#     lines = [ax.plot([], [], label=f"Chan {i+1}")[0] for i in range(num_ch)]
+#     ax.set_xlabel("Sample Index")
+#     ax.set_ylabel("EXG Value")
+#     ax.set_xlim(0, len(buf))
+#     ax.legend().set_visible(False)
+
+#     for i in range(num_ch):
+#         vals = [float(sample[i + 1]) for sample in buf]
+#         lines[i].set_data(x, vals)
+
+#     all_vals = [v for sample in buf for v in sample[1:]]
+#     if all_vals and all_vals is int:
+#         ax.set_ylim(min(all_vals) * 1.1, max(all_vals) * 1.1)
+
+#     fig.canvas.draw()
+#     fig.canvas.flush_events()
+
+def elastic_search_upload(
+    fd: str,
+    index: str,
+    host: str = "localhost",
+    port: int = 9200,
+    username: Optional[str] = None,
+    password: Optional[str] = None,
+):
+    from elasticsearch import Elasticsearch, helpers
+
+    es = Elasticsearch(
+        [{"host": host, "port": port}],
+        http_auth=(username, password) if username and password else None,
+    )
+
+    with open(fd, "r") as f:
+        entries = [json.loads(line) for line in f if line.strip()]
+
+    if not entries:
+        print(f"No valid entries found in {fd}")
+        return
+
+    actions = [
+        {
+            "_index": index,
+            "_source": entry,
+        }
+        for entry in entries
+    ]
+
+    helpers.bulk(es, actions)
+    print(f"Uploaded {len(actions)} entries to index '{index}'")
+    

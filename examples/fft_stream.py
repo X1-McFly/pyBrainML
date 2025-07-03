@@ -29,7 +29,7 @@ from typing import Deque, List, Optional
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.signal import welch
-from yaspin import yaspin
+# from yaspin import yaspin
 
 import pybrainml as bml
 from pybrainml import ElectrodeType, Boards, Frame
