@@ -1,4 +1,4 @@
-/data/
+/data/*
 *.ndjson
 test*
 /env/

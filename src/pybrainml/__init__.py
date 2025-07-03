@@ -244,6 +244,7 @@ def exg_stream(
     # callback: Optional[Callable[[Deque[List[float | str]]], None]] = None,
     board_fd: BoardShim,
     length: int = 200,
+    save_fd: str = "data",
     duration: Optional[float] = None,
 ):
     """
@@ -253,7 +254,8 @@ def exg_stream(
     """
     from threading import Event
 
-    temp_f = os.path.join(os.getcwd(), "data", "temp.ndjson")
+    os.makedirs(save_fd, exist_ok=True)
+    temp_f = os.path.join(os.getcwd(), save_fd, "temp.ndjson")
     
     # board_fd, sampling_rate, eeg_chs = connect_board(port, Boards.OpenBCI_Ganglion.value)
     buf: Deque[List[float | str]] = deque(maxlen=length)
