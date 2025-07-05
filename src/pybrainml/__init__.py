@@ -19,6 +19,8 @@ from brainflow.board_shim import BoardShim, BrainFlowInputParams, BoardIds
 # import pandas as pd
 # import numpy as np
 from yaspin import yaspin
+from dotenv import load_dotenv
+from elasticsearch import Elasticsearch, helpers
 
 VERSION = "0.3.2"
 
@@ -151,27 +153,27 @@ def create_experiment():
         def to_dict(self):
             return asdict(self)
         
-
     @dataclass
     class Experiment:
         metadata: Metadata = field(default_factory=Metadata)
         frames: List[Frame] = field(default_factory=list)
 
+        def user_setup(self, name: str, age: Optional[int], sex: Optional[str]):
+            self.metadata.subject_info = Subject(name, age, sex)
+
+        def hardware_setup(self, electrode_type: ElectrodeType, board_name: Boards):
+            hw = Hardware()
+            hw.setup(electrode_type, board_name)
+            self.metadata.hardware_info = hw
+
         def to_dict(self):
             return asdict(self)
-        
-        @staticmethod
-        def user_setup(name: str, age: Optional[int], sex: Optional[str]):
-            subject_info = Subject(name, age, sex)
-
-        @staticmethod
-        def hardware_setup(electrode_type: ElectrodeType, board_name: Boards):
-            hardware_info = Hardware(electrode_type.value, board_name.value, board_name.channels, board_name.sampling_rate)
-        
+    
     return Experiment()
 
-  
-def connect_board(port: str, board_id: Boards, max_retries: int = 3) -> BoardShim:
+def connect_board(port: str, 
+                  board_id: Boards, 
+                  max_retries: int = 3) -> BoardShim:
 
     params = BrainFlowInputParams()
     params.serial_port = port   
@@ -218,14 +220,6 @@ def board_session(board_fd: BoardShim):
         board_fd.stop_stream()
         board_fd.release_session()
 
-# def init_board(port: str) -> Tuple[int, int, List[int]]:
-#     params = BrainFlowInputParams(); params.serial_port = port
-#     board_id = BoardIds.GANGLION_BOARD.value
-#     sampling_rate = BoardShim.get_sampling_rate(board_id)
-#     eeg_channels = BoardShim.get_eeg_channels(board_id)
-#     # ts_channel = BoardShim.get_timestamp_channel(board_id)
-#     return board_id, sampling_rate, eeg_channels
-
 def _save_worker(path: str, q: Queue):
     if os.path.exists(path):
         os.remove(path)
@@ -239,9 +233,6 @@ def _save_worker(path: str, q: Queue):
             f.flush()
 
 def exg_stream(
-    # port: str,
-    # save_to: Optional[str] = None,
-    # callback: Optional[Callable[[Deque[List[float | str]]], None]] = None,
     board_fd: BoardShim,
     length: int = 200,
     save_fd: str = "data",
@@ -333,9 +324,6 @@ def exg_stream(
         @staticmethod
         def get_final():
             return post_process(temp_f)
-        
-        # @staticmethod
-        # def post_process()
 
     return Handle()
 
@@ -363,71 +351,98 @@ def post_process(fd) -> Frame | None:
     )
     return frame
 
+def export_experiment(session, 
+                      exp, 
+                      data_dir: str = "data"):
+    
+    filename = os.path.join(data_dir, get_unique_file(data_dir, "test.json"))
+    processed_frame = session.get_final()
+    if processed_frame is not None:
+        print(f"Saving processed frame to {filename}...")
+        exp.frames.append(processed_frame)
+        with open(filename, "w") as f:
+            json.dump(exp.to_dict(), f, indent=4)
+    else:
+        print("No processed frame to save.")
+
 @dataclass
 class placements:
-    C1: str = "C1"
-    # C2: str = "C2"
-    # C3: str = "C3"
-    # C4: str = "C4"
-    # C5: str = "C5"
+    pass
 
-# def plot(buf: Deque[List[float | str]]):
-#     import matplotlib.pyplot as plt
+@dataclass
+class upload:
 
-#     if not buf:
+    index: str = "biocom"
+    host: str = "localhost"
+    port: int = 9200
+    username: Optional[str] = None
+    password: Optional[str] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+
+    def __post_init__(self):
+        if not self.index:
+            raise ValueError("Index name must be provided")
+        if not self.host:
+            raise ValueError("Host must be provided")
+        if not isinstance(self.port, int) or self.port <= 0:
+            raise ValueError("Port must be a positive integer")
+
+    @staticmethod
+    def es_connect():
+        dotenv_path = os.path.join(os.getcwd(),"env", 'keys.env')
+        if os.path.exists(dotenv_path):
+            load_dotenv(dotenv_path)
+            print("Loading environment variables...")
+        else:
+            raise FileNotFoundError(f"Environment file not found at {dotenv_path}")
+
+        ES_HOST = os.getenv("ES_HOST")
+        ES_ID = os.getenv("ES_ID")
+        ES_SECRET = os.getenv("ES_SECRET")
+
+        if not all([ES_HOST, ES_ID, ES_SECRET]):
+            raise ValueError("Missing required environment variables: ES_HOST, ES_ID, ES_SECRET")
+
+        try:
+            es = Elasticsearch([ES_HOST], api_key=(ES_ID, ES_SECRET), verify_certs=True) # type: ignore
+            if not es.ping():
+                raise ValueError("Ping failed: could not connect to cluster.")
+            print("Connected to Elasticsearch successfully!")
+        except Exception as e:
+            print(f"[!] Elasticsearch connection failed:\n{e}")
+            raise
+
+
+# def elastic_search_upload(
+#     fd: str,
+#     index: str,
+#     host: str = "localhost",
+#     port: int = 9200,
+#     username: Optional[str] = None,
+#     password: Optional[str] = None,
+# ):
+#     from elasticsearch import Elasticsearch, helpers
+
+#     es = Elasticsearch(
+#         [{"host": host, "port": port}],
+#         http_auth=(username, password) if username and password else None,
+#     )
+
+#     with open(fd, "r") as f:
+#         entries = [json.loads(line) for line in f if line.strip()]
+
+#     if not entries:
+#         print(f"No valid entries found in {fd}")
 #         return
 
-#     num_ch = len(buf[0]) - 1  # Exclude timestamp
-#     x = list(range(len(buf)))
+#     actions = [
+#         {
+#             "_index": index,
+#             "_source": entry,
+#         }
+#         for entry in entries
+#     ]
 
-#     fig, ax = plt.subplots()
-#     lines = [ax.plot([], [], label=f"Chan {i+1}")[0] for i in range(num_ch)]
-#     ax.set_xlabel("Sample Index")
-#     ax.set_ylabel("EXG Value")
-#     ax.set_xlim(0, len(buf))
-#     ax.legend().set_visible(False)
-
-#     for i in range(num_ch):
-#         vals = [float(sample[i + 1]) for sample in buf]
-#         lines[i].set_data(x, vals)
-
-#     all_vals = [v for sample in buf for v in sample[1:]]
-#     if all_vals and all_vals is int:
-#         ax.set_ylim(min(all_vals) * 1.1, max(all_vals) * 1.1)
-
-#     fig.canvas.draw()
-#     fig.canvas.flush_events()
-
-def elastic_search_upload(
-    fd: str,
-    index: str,
-    host: str = "localhost",
-    port: int = 9200,
-    username: Optional[str] = None,
-    password: Optional[str] = None,
-):
-    from elasticsearch import Elasticsearch, helpers
-
-    es = Elasticsearch(
-        [{"host": host, "port": port}],
-        http_auth=(username, password) if username and password else None,
-    )
-
-    with open(fd, "r") as f:
-        entries = [json.loads(line) for line in f if line.strip()]
-
-    if not entries:
-        print(f"No valid entries found in {fd}")
-        return
-
-    actions = [
-        {
-            "_index": index,
-            "_source": entry,
-        }
-        for entry in entries
-    ]
-
-    helpers.bulk(es, actions)
-    print(f"Uploaded {len(actions)} entries to index '{index}'")
-    
+#     helpers.bulk(es, actions)
+#     print(f"Uploaded {len(actions)} entries to index '{index}'")

@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 EEG Streaming, Real-Time Plotting, and Gamma-Band Power Extraction Example
 
@@ -21,11 +19,8 @@ Dependencies:
 """
 
 import time
-import json
 from collections import deque
-from datetime import datetime
-from typing import Deque, List, Optional
-import os
+from typing import Deque, List
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -135,15 +130,7 @@ def main():
         print("Stopping session...")
         session.stop()
         
-        filename = os.path.join(data_dir, bml.get_unique_file(data_dir, "test.json"))
-        processed_frame = session.get_final()
-        if processed_frame is not None:
-            print(f"Saving processed frame to {filename}...")
-            exp.frames.append(processed_frame)
-            with open(filename, "w") as f:
-                json.dump(exp.to_dict(), f, indent=4)
-        else:
-            print("No processed frame to save.")
+        bml.export_experiment(session, exp, data_dir)
         
         plt.ioff()
         plt.close()
