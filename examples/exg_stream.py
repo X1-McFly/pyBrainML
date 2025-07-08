@@ -33,7 +33,7 @@ def main():
 
     exp = bml.create_experiment()
     exp.user_setup("John Doe", 35, "F")
-    exp.hardware_setup(ElectrodeType.HYBRID, Boards.OpenBCI_Ganglion)
+    exp.hardware_setup(ElectrodeType.DRY, Boards.OpenBCI_Ganglion)
 
 
     # Connect to board and prepare streaming session

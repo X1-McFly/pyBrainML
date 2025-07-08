@@ -11,13 +11,14 @@ import uuid
 # import queue
 from multiprocessing import Process, Queue
 from dataclasses import dataclass, field, asdict
-from typing import List, Any, Callable, Deque, List, Optional, Tuple
+from typing import List, Any, Callable, Deque, Optional, Tuple, Dict, Union
 from contextlib import contextmanager
 # from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
 from brainflow.board_shim import BoardShim, BrainFlowInputParams, BoardIds
 # import pandas as pd
 # import numpy as np
+import numpy as np
 from yaspin import yaspin
 from dotenv import load_dotenv
 from elasticsearch import Elasticsearch, helpers
@@ -83,24 +84,22 @@ class Subject:
     age: int | None = None
     sex: str | None = None
 
-    def setup(self, NAME, AGE, SEX):
-        self.name = NAME
-        self.age = AGE
-        self.sex = SEX
+    def setup(self, name: str, age: int, sex: str):
+        """Setup subject information with automatic name hashing for privacy."""
+        self.name = self._hash_name(name)
+        self.age = age
+        self.sex = sex
     
-    def hash_name(self):
-        if self.name is None:
-            raise ValueError("Name must be set before hashing")
-        else:
-            self.name = hashlib.sha256(self.name.lower().encode()).hexdigest()
+    def _hash_name(self, name: str) -> str:
+        """Hash the name for privacy protection."""
+        return hashlib.sha256(name.lower().encode()).hexdigest()
 
-    def __setattr__(self, key, value):
-        if key == "name" and value is not None:
-            value = hashlib.sha256(value.lower().encode()).hexdigest()
-        super().__setattr__(key, value)
-
-    def to_dict(self):
-        return asdict(self)
+    def to_dict(self) -> Dict:
+        return {
+            "name": self.name,
+            "age": self.age,
+            "sex": self.sex
+        }
 
 @dataclass
 class Frame:
@@ -239,7 +238,7 @@ def exg_stream(
     duration: Optional[float] = None,
 ):
     """
-    Streams EEG data from the board. Maintains a sliding window of the most recent EEG data (deque of size `length`).
+    Streams EXG data from the board. Maintains a sliding window of the most recent EXG data (deque of size `length`).
     The program uses two alternating buffers to batch-save data to disk efficiently in a background thread.
     Returns a handle with a `get_buffer()` and `stop()` method.
     """
@@ -413,36 +412,507 @@ class upload:
             print(f"[!] Elasticsearch connection failed:\n{e}")
             raise
 
+def load_experiment_from_json(filepath: str):
+    
+    with open(filepath, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    exp = create_experiment()
+    # Load metadata
+    meta = data.get("metadata", {})
+    # Remove reserved keys if present
+    meta_clean = {k: v for k, v in meta.items() if not k.startswith("_")}
+    # Subject
+    subj = meta_clean.get("subject_info", {})
+    exp.metadata.subject_info = Subject(**subj)
+    # Description
+    exp.metadata.description = meta_clean.get("description")
+    # Hardware
+    hw = meta_clean.get("hardware_info", {})
+    exp.metadata.hardware_info = Hardware(**hw)
+    # Placements, Z, Z_REF
+    exp.metadata.placements = meta_clean.get("placements", [])
+    exp.metadata.Z = meta_clean.get("Z", [])
+    exp.metadata.Z_REF = meta_clean.get("Z_REF", 0.0)
+    # Load frames
+    exp.frames = [Frame(**frame) for frame in data.get("frames", [])]
+    return exp
 
-# def elastic_search_upload(
-#     fd: str,
-#     index: str,
-#     host: str = "localhost",
-#     port: int = 9200,
-#     username: Optional[str] = None,
-#     password: Optional[str] = None,
-# ):
-#     from elasticsearch import Elasticsearch, helpers
+def compute_fft(data: List[List[float]]) -> List[List[float]]:
+    """
+    Computes the Fast Fourier Transform (FFT) for each row in the data.
+    Each row is expected to be a list of float values.
+    Returns a list of lists containing the FFT results.
+    """
+    import numpy as np
+    return [np.fft.fft(row).tolist() for row in data]
 
-#     es = Elasticsearch(
-#         [{"host": host, "port": port}],
-#         http_auth=(username, password) if username and password else None,
-#     )
+def compute_power_spectrum(data: List[List[float]]) -> List[List[float]]:
+    """
+    Computes the Power Spectrum for each row in the data.
+    Each row is expected to be a list of float values.
+    Returns a list of lists containing the Power Spectrum results.
+    """
+    import numpy as np
+    return [(np.abs(np.fft.fft(row))**2).tolist() for row in data]
 
-#     with open(fd, "r") as f:
-#         entries = [json.loads(line) for line in f if line.strip()]
+def compute_band_powers(data: List[List[float]], bands: List[Tuple[float, float]]) -> List[List[float]]:
+    """
+    Computes the band powers for each row in the data.
+    Each row is expected to be a list of float values.
+    Bands should be a list of tuples, where each tuple contains the lower and upper frequency bounds.
+    Returns a list of lists containing the band power results.
+    """
+    import numpy as np
+    band_powers = []
+    for row in data:
+        fft_result = np.fft.fft(row)
+        freqs = np.fft.fftfreq(len(row))
+        powers = np.abs(fft_result)**2
+        band_power_row = []
+        for low, high in bands:
+            band_mask = (freqs >= low) & (freqs <= high)
+            band_power_row.append(np.sum(powers[band_mask]))
+        band_powers.append(band_power_row)
+    return band_powers
 
-#     if not entries:
-#         print(f"No valid entries found in {fd}")
-#         return
 
-#     actions = [
-#         {
-#             "_index": index,
-#             "_source": entry,
-#         }
-#         for entry in entries
-#     ]
+# ===== ELASTICSEARCH INTEGRATION =====
 
-#     helpers.bulk(es, actions)
-#     print(f"Uploaded {len(actions)} entries to index '{index}'")
+class ElasticsearchClient:
+    """
+    Elasticsearch client for EEG data storage following TSDS architecture.
+    Implements the specification for experiments, frames, and time-series data streams.
+    """
+    
+    def __init__(self, 
+                 host: str = "localhost", 
+                 port: int = 9200, 
+                 username: Optional[str] = None, 
+                 password: Optional[str] = None,
+                 use_https: bool = False):
+        """Initialize Elasticsearch client with connection parameters."""
+        self.host = host
+        self.port = port
+        self.use_https = use_https
+        
+        scheme = "https" if use_https else "http"
+        self.es = Elasticsearch(
+            [f"{scheme}://{host}:{port}"],
+            basic_auth=(username, password) if username and password else None,
+            verify_certs=use_https
+        )
+        
+        if not self.es.ping():
+            raise ValueError("Elasticsearch connection failed.")
+        
+        print(f"Connected to Elasticsearch at {host}:{port}")
+    
+    def setup_indices(self):
+        """Create the experiments and frames indices with proper mappings."""
+        
+        # Experiments index mapping
+        experiments_mapping = {
+            "mappings": {
+                "properties": {
+                    "experiment_id": {"type": "keyword"},
+                    "version": {"type": "keyword"},
+                    "created_at": {"type": "date"},
+                    "created_by": {"type": "keyword"},
+                    "subject_info": {
+                        "properties": {
+                            "subject_id": {"type": "keyword"},
+                            "age": {"type": "integer"},
+                            "sex": {"type": "keyword"}
+                        }
+                    },
+                    "description": {"type": "text"},
+                    "hardware_info": {
+                        "properties": {
+                            "electrode_type": {"type": "keyword"},
+                            "board": {"type": "keyword"},
+                            "channels": {"type": "integer"},
+                            "sampling_rate": {"type": "integer"}
+                        }
+                    },
+                    "placements": {"type": "keyword"},
+                    "Z": {"type": "integer"},
+                    "Z_REF": {"type": "integer"}
+                }
+            }
+        }
+        
+        # Frames index mapping
+        frames_mapping = {
+            "mappings": {
+                "properties": {
+                    "experiment_id": {"type": "keyword"},
+                    "frame_id": {"type": "keyword"},
+                    "label": {"type": "keyword"},
+                    "timestamp": {"type": "date"},
+                    "eeg": {
+                        "type": "object",
+                        "dynamic": True
+                    }
+                }
+            }
+        }
+        
+        # Create indices if they don't exist
+        if not self.es.indices.exists(index="experiments"):
+            self.es.indices.create(index="experiments", body=experiments_mapping)
+            print("Created 'experiments' index")
+        
+        if not self.es.indices.exists(index="frames"):
+            self.es.indices.create(index="frames", body=frames_mapping)
+            print("Created 'frames' index")
+    
+    def setup_tsds(self, channel_names: List[str]):
+        """Setup Time Series Data Stream for real-time frame ingestion."""
+        
+        # Build dynamic EEG field mappings
+        eeg_properties = {}
+        for channel in channel_names:
+            eeg_properties[f"eeg.{channel}"] = {"type": "float"}
+        
+        template_body = {
+            "index_patterns": ["frames-tsds*"],
+            "data_stream": {
+                "timestamp_field": "@timestamp",
+                "index_mode": "time_series"
+            },
+            "template": {
+                "mappings": {
+                    "properties": {
+                        "@timestamp": {"type": "date"},
+                        "experiment_id": {"type": "keyword"},
+                        "frame_id": {"type": "keyword"},
+                        "label": {"type": "keyword"},
+                        **eeg_properties
+                    }
+                },
+                "settings": {
+                    "index.lifecycle.name": "frames-tsds-ilm",
+                    "index.routing_path": ["experiment_id"],
+                    "index.sort.field": ["experiment_id", "@timestamp"],
+                    "index.sort.order": ["asc", "asc"]
+                }
+            }
+        }
+        
+        # Create index template
+        self.es.indices.put_index_template(
+            name="frames-tsds-template",
+            body=template_body
+        )
+        
+        # Create data stream
+        try:
+            self.es.indices.create_data_stream(name="frames-tsds")
+            print("Created 'frames-tsds' data stream")
+        except Exception as e:
+            if "resource_already_exists_exception" not in str(e):
+                raise e
+    
+    def upload_experiment_metadata(self, experiment_dict: Dict) -> str:
+        """Upload experiment metadata and return experiment_id."""
+        experiment_id = str(uuid.uuid4())
+        
+        metadata = experiment_dict.get("metadata", {})
+        
+        # Prepare experiment document
+        experiment_doc = {
+            "experiment_id": experiment_id,
+            "version": metadata.get("_version", VERSION),
+            "created_at": metadata.get("_created_at", datetime.now().isoformat()),
+            "created_by": metadata.get("_created_by", "pybrainml"),
+            "subject_info": {
+                "subject_id": metadata.get("subject_info", {}).get("name", "unknown"),
+                "age": metadata.get("subject_info", {}).get("age"),
+                "sex": metadata.get("subject_info", {}).get("sex")
+            },
+            "description": metadata.get("description"),
+            "hardware_info": metadata.get("hardware_info", {}),
+            "placements": metadata.get("placements", []),
+            "Z": metadata.get("Z", []),
+            "Z_REF": metadata.get("Z_REF", 0.0)
+        }
+        
+        # Upload to experiments index
+        result = self.es.index(
+            index="experiments",
+            id=experiment_id,
+            document=experiment_doc
+        )
+        
+        print(f"Uploaded experiment metadata with ID: {experiment_id}")
+        return experiment_id
+    
+    def upload_frames_bulk(self, experiment_id: str, frames: List[Dict], 
+                          channel_names: List[str]) -> List[str]:
+        """Upload frames in bulk to the frames index."""
+        actions = []
+        frame_ids = []
+        
+        for frame in frames:
+            frame_id = str(uuid.uuid4())
+            frame_ids.append(frame_id)
+            
+            # Convert eeg_data to channel-based format
+            eeg_data = frame.get("eeg_data", [])
+            eeg_dict = {}
+            
+            if eeg_data and len(channel_names) > 0:
+                # Assume eeg_data is a list of lists, take the first sample per channel
+                for i, channel in enumerate(channel_names):
+                    if i < len(eeg_data) and len(eeg_data[i]) > 0:
+                        eeg_dict[channel] = float(eeg_data[i][0])
+            
+            frame_doc = {
+                "experiment_id": experiment_id,
+                "frame_id": frame_id,
+                "label": frame.get("label"),
+                "timestamp": frame.get("timestamp", datetime.now().isoformat()),
+                "eeg": eeg_dict
+            }
+            
+            actions.append({
+                "_index": "frames",
+                "_id": frame_id,
+                "_source": frame_doc
+            })
+        
+        if actions:
+            helpers.bulk(self.es, actions)
+            print(f"Uploaded {len(actions)} frames to 'frames' index")
+        
+        return frame_ids
+    
+    def upload_frame_to_tsds(self, experiment_id: str, frame: Dict, 
+                           channel_names: List[str]) -> str:
+        """Upload a single frame to the TSDS for real-time streaming."""
+        frame_id = str(uuid.uuid4())
+        
+        # Convert eeg_data to flattened channel format for TSDS
+        eeg_data = frame.get("eeg_data", [])
+        tsds_doc = {
+            "@timestamp": frame.get("timestamp", datetime.now().isoformat()),
+            "experiment_id": experiment_id,
+            "frame_id": frame_id,
+            "label": frame.get("label")
+        }
+        
+        # Add flattened EEG data
+        if eeg_data and len(channel_names) > 0:
+            for i, channel in enumerate(channel_names):
+                if i < len(eeg_data) and len(eeg_data[i]) > 0:
+                    tsds_doc[f"eeg.{channel}"] = float(eeg_data[i][0])
+        
+        # Upload to TSDS
+        result = self.es.index(
+            index="frames-tsds",
+            document=tsds_doc
+        )
+        
+        return frame_id
+    
+    def get_experiment_metadata(self, experiment_id: str) -> Dict:
+        """Retrieve experiment metadata by ID."""
+        try:
+            result = self.es.get(index="experiments", id=experiment_id)
+            return result["_source"]
+        except Exception as e:
+            print(f"Failed to retrieve experiment {experiment_id}: {e}")
+            raise
+    
+    def get_experiment_frames(self, experiment_id: str, 
+                            start_time: Optional[str] = None,
+                            end_time: Optional[str] = None) -> List[Dict]:
+        """Retrieve frames for an experiment with optional time filtering."""
+        query = {
+            "bool": {
+                "must": [
+                    {"term": {"experiment_id": experiment_id}}
+                ]
+            }
+        }
+        
+        if start_time or end_time:
+            time_range = {}
+            if start_time:
+                time_range["gte"] = start_time
+            if end_time:
+                time_range["lte"] = end_time
+            
+            query["bool"]["must"].append({
+                "range": {"timestamp": time_range}
+            })
+        
+        search_body = {
+            "query": query,
+            "sort": [{"timestamp": "asc"}],
+            "size": 10000  # Adjust as needed
+        }
+        
+        result = self.es.search(index="frames", body=search_body)
+        return [hit["_source"] for hit in result["hits"]["hits"]]
+    
+    def search_tsds_frames(self, experiment_id: str, 
+                          start_time: Optional[str] = None,
+                          end_time: Optional[str] = None) -> List[Dict]:
+        """Search TSDS frames with time range filtering."""
+        query = {
+            "bool": {
+                "must": [
+                    {"term": {"experiment_id": experiment_id}}
+                ]
+            }
+        }
+        
+        if start_time or end_time:
+            time_range = {}
+            if start_time:
+                time_range["gte"] = start_time
+            if end_time:
+                time_range["lte"] = end_time
+            
+            query["bool"]["must"].append({
+                "range": {"@timestamp": time_range}
+            })
+        
+        search_body = {
+            "query": query,
+            "sort": [{"@timestamp": "asc"}],
+            "size": 10000
+        }
+        
+        result = self.es.search(index="frames-tsds", body=search_body)
+        return [hit["_source"] for hit in result["hits"]["hits"]]
+
+
+def create_elasticsearch_client(host: str = "localhost", 
+                              port: int = 9200,
+                              username: Optional[str] = None,
+                              password: Optional[str] = None,
+                              use_https: bool = False) -> ElasticsearchClient:
+    """Create and return an Elasticsearch client instance."""
+    return ElasticsearchClient(host, port, username, password, use_https)
+
+
+def upload_experiment_to_elasticsearch(experiment_dict: Dict,
+                                     es_client: ElasticsearchClient,
+                                     channel_names: Optional[List[str]] = None) -> Dict[str, Union[str, int, List[str]]]:
+    """
+    Upload complete experiment to Elasticsearch using the TSDS architecture.
+    
+    Returns:
+        Dictionary with experiment_id and upload statistics
+    """
+    # Setup indices if not already done
+    es_client.setup_indices()
+    
+    # Determine channel names from hardware info or use defaults
+    if not channel_names:
+        hardware_info = experiment_dict.get("metadata", {}).get("hardware_info", {})
+        num_channels = hardware_info.get("channels", 4)
+        channel_names = [f"Ch{i+1}" for i in range(num_channels)]
+    
+    # Setup TSDS with channel names
+    es_client.setup_tsds(channel_names)
+    
+    # Upload metadata
+    experiment_id = es_client.upload_experiment_metadata(experiment_dict)
+    
+    # Upload frames
+    frames = experiment_dict.get("frames", [])
+    frame_ids = []
+    
+    if frames:
+        frame_ids = es_client.upload_frames_bulk(experiment_id, frames, channel_names)
+    
+    return {
+        "experiment_id": experiment_id,
+        "frames_uploaded": len(frame_ids),
+        "frame_ids": frame_ids[:10]  # Return first 10 for reference
+    }
+
+class RealTimeEEGStreamer:
+    """
+    Real-time EEG streaming to Elasticsearch TSDS.
+    Handles live data ingestion with minimal latency.
+    """
+    
+    def __init__(self, es_client: ElasticsearchClient, experiment_id: str, 
+                 channel_names: List[str], buffer_size: int = 100):
+        self.es_client = es_client
+        self.experiment_id = experiment_id
+        self.channel_names = channel_names
+        self.buffer_size = buffer_size
+        self.frame_buffer = []
+        self.is_streaming = False
+        
+    def start_streaming(self):
+        """Start the real-time streaming."""
+        self.is_streaming = True
+        print(f"Started real-time streaming for experiment {self.experiment_id}")
+    
+    def stop_streaming(self):
+        """Stop streaming and flush remaining buffer."""
+        self.is_streaming = False
+        if self.frame_buffer:
+            self._flush_buffer()
+        print("Stopped real-time streaming")
+    
+    def add_frame(self, frame_data: Dict):
+        """Add a frame to the streaming buffer."""
+        if not self.is_streaming:
+            return
+            
+        self.frame_buffer.append(frame_data)
+        
+        if len(self.frame_buffer) >= self.buffer_size:
+            self._flush_buffer()
+    
+    def _flush_buffer(self):
+        """Flush the current buffer to Elasticsearch TSDS."""
+        if not self.frame_buffer:
+            return
+            
+        try:
+            for frame in self.frame_buffer:
+                self.es_client.upload_frame_to_tsds(
+                    self.experiment_id, frame, self.channel_names
+                )
+            
+            print(f"Flushed {len(self.frame_buffer)} frames to TSDS")
+            self.frame_buffer.clear()
+            
+        except Exception as e:
+            print(f"Failed to flush buffer to TSDS: {e}")
+
+def create_realtime_streamer(es_client: ElasticsearchClient, 
+                           experiment_dict: Dict,
+                           channel_names: Optional[List[str]] = None) -> RealTimeEEGStreamer:
+    """
+    Create a real-time EEG streamer for live data ingestion.
+    
+    Args:
+        es_client: Elasticsearch client instance
+        experiment_dict: Experiment metadata
+        channel_names: List of EEG channel names
+        
+    Returns:
+        RealTimeEEGStreamer instance
+    """
+    # Upload experiment metadata first
+    experiment_id = es_client.upload_experiment_metadata(experiment_dict)
+    
+    # Determine channel names
+    if not channel_names:
+        hardware_info = experiment_dict.get("metadata", {}).get("hardware_info", {})
+        num_channels = hardware_info.get("channels", 4)
+        channel_names = [f"Ch{i+1}" for i in range(num_channels)]
+    
+    # Setup TSDS
+    es_client.setup_tsds(channel_names)
+    
+    return RealTimeEEGStreamer(es_client, experiment_id, channel_names)
