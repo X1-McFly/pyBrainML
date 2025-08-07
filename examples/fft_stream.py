@@ -44,7 +44,7 @@ def main():
 
 
     # Connect to board and prepare streaming session
-    board_fd = bml.connect_board(port, Boards.OpenBCI_Ganglion)
+    board_fd = bml.connect_board(exp, port)
     session = bml.exg_stream(board_fd, length=window_length)
 
     # Prepare real‐time plots: raw EEG and gamma‐band power

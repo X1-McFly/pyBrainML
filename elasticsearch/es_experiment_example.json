@@ -1,0 +1,35 @@
+{
+    "metadata": {
+        "_version": "0.3.1",
+        "_created_at": "2025-07-01T08:28:16.521204",
+        "_created_by": "MM-Thinkpad",
+        "uuid": "94890005f3b2117a353da7260259531878cae4f541bf59998511887d1f0221a5",
+        "subject_info": {
+            "name": null,
+            "age": 35,
+            "sex": "F"
+        },
+        "description": null,
+        "hardware_info": {
+            "electrode_type": "HYBRID",
+            "board": "OpenBCI_Ganglion",
+            "channels": 4,
+            "sampling_rate": 200
+        },
+        "placements": ["Fp1", "Fp2", "C3", "C4"],
+        "Z": [121, 121, 121, 121],
+        "Z_REF": 60
+    },
+    "frames": [
+        {
+            "label": null,
+            "timestamp": "2025-07-01T08:28:18.310919",
+            "doc_id": "e2b7c1a2-4f3e-4b9a-8c2e-7d1a9e5f3b2c"
+        },
+        {
+            "label": null,
+            "timestamp": "2025-07-01T08:28:18.310919",
+            "doc_id": "b7e6c9d4-2f1a-4e8b-9c3e-5f2a1b7c9d4e"
+        }
+    ]
+}

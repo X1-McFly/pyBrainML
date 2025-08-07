@@ -1,0 +1,163 @@
+.es-connection {
+  text-align: left;
+}
+
+.es-connection h3 {
+  margin: 0 0 20px 0;
+  color: #333;
+}
+
+.connection-form {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.input-group label {
+  font-weight: 500;
+  color: #555;
+}
+
+.input-group input {
+  padding: 8px 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.input-group input:focus {
+  outline: none;
+  border-color: #4CAF50;
+  box-shadow: 0 0 0 2px rgba(76, 175, 80, 0.2);
+}
+
+.connect-btn {
+  padding: 10px 20px;
+  background-color: #4CAF50;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 16px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.connect-btn:hover:not(:disabled) {
+  background-color: #45a049;
+}
+
+.connect-btn:disabled {
+  background-color: #cccccc;
+  cursor: not-allowed;
+}
+
+.connected {
+  border-left: 4px solid #4CAF50;
+  padding-left: 16px;
+}
+
+.connection-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.status-indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  animation: pulse 2s infinite;
+}
+
+.status-indicator.connected {
+  background-color: #4CAF50;
+}
+
+.status-indicator.streaming {
+  background-color: #2196F3;
+}
+
+@keyframes pulse {
+  0% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+.disconnect-btn {
+  padding: 5px 15px;
+  background-color: #f44336;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.disconnect-btn:hover {
+  background-color: #da190b;
+}
+
+.streaming-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.streaming-buttons {
+  display: flex;
+  gap: 10px;
+}
+
+.start-streaming-btn {
+  padding: 8px 16px;
+  background-color: #2196F3;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.start-streaming-btn:hover:not(:disabled) {
+  background-color: #1976D2;
+}
+
+.start-streaming-btn:disabled {
+  background-color: #cccccc;
+  cursor: not-allowed;
+}
+
+.stop-streaming-btn {
+  padding: 8px 16px;
+  background-color: #f44336;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.stop-streaming-btn:hover {
+  background-color: #da190b;
+}
+
+.streaming-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #2196F3;
+  font-weight: 500;
+}
