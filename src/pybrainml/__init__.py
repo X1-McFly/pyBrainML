@@ -24,7 +24,7 @@ from yaspin import yaspin
 from dotenv import load_dotenv
 from elasticsearch import Elasticsearch, helpers
 
-VERSION = "0.3.4"
+VERSION = "0.3.5"
 
 BoardShim.disable_board_logger() 
 logging.basicConfig(
@@ -733,7 +733,7 @@ class es:
             if documents:
                 actions = [{"_index": index_name, "_source": doc} for doc in documents]
                 helpers.bulk(client, actions)
-                logger.info(f"Indexed {len(documents)} documents to {index_name}")
+                logger.debug(f"Indexed {len(documents)} documents to {index_name}")
                 return True
         except Exception as e:
             logger.error(f"Bulk indexing failed: {e}")

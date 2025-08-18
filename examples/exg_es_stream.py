@@ -2,7 +2,7 @@
 EXG Elasticsearch Real-Time Plotting Example
 
 Author: Martin McCorkle
-Date: 2025-08-07
+Date: 2025-08-06
 Description:
     Demonstrates EEG data streaming to Elasticsearch with real-time plotting of ES data.
     Synthetic EEG data is uploaded to Elasticsearch and then pulled back in real-time
@@ -26,11 +26,16 @@ import time
 from typing import Deque, List
 import threading
 from queue import Queue, Empty
+import logging
 
 import matplotlib.pyplot as plt
 
 import pybrainml as bml
 from pybrainml import ElectrodeType, Boards
+
+# Silence Elasticsearch request logs
+for name in ("elastic_transport", "elasticsearch", "urllib3"):
+    logging.getLogger(name).setLevel(logging.WARNING)
 
 def main():
     """Main function demonstrating Elasticsearch streaming with real-time plotting"""
@@ -38,7 +43,6 @@ def main():
     # Experiment setup
     port = "COM8"
     # port = None
-    data_dir = "data"
     window_length = 200
     
     exp = bml.create_experiment()
@@ -61,12 +65,8 @@ def main():
         duration=None,
         use_elasticsearch=True, 
         experiment=exp,
-        es_batch_size=50
+        es_batch_size=25
     )
-    
-    print(f"Streaming to Elasticsearch with experiment ID: {session.get_experiment_id()}")
-    print(f"Metadata document ID: {session.get_es_doc_id()}")
-    print(f"Elasticsearch enabled: {session.is_using_elasticsearch()}")
     
     # Start streaming
     session.start()
@@ -110,7 +110,6 @@ def main():
                     experiment_id = session.get_experiment_id()
                     
                     if es_client and experiment_id:
-                        # Fetch only NEW data since last update
                         query = {
                             "query": {
                                 "bool": {
@@ -121,7 +120,7 @@ def main():
                                 }
                             },
                             "sort": [{"sequence_id": {"order": "asc"}}],
-                            "size": 50  
+                            "size": 5
                         }
                         
                         response = es_client.search(index="bci_tsds", body=query)
@@ -141,12 +140,8 @@ def main():
                             
                             # Put new data in queue for plotting thread
                             data_queue.put(plot_data)
-                    
-                    time.sleep(0.02)  # 50 FPS ES queries
-                    
                 except Exception as e:
                     print(f"ES worker error: {e}")
-                    time.sleep(0.1)
         
         # Start ES worker thread
         es_thread = threading.Thread(target=es_worker, daemon=True)
@@ -192,8 +187,6 @@ def main():
                     # Redraw plot
                     fig.canvas.draw()
                     fig.canvas.flush_events()
-                
-                time.sleep(0.033)  # ~30 FPS plotting updates
                 
             except Exception as e:
                 print(f"Plot update error: {e}")

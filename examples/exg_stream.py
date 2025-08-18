@@ -35,8 +35,8 @@ def main():
     exp.user_setup(None, 35, "F")
     
     # Choose board type:
-    # exp.hardware_setup(ElectrodeType.DRY, Boards.OpenBCI_Ganglion)
-    exp.hardware_setup(ElectrodeType.DRY, Boards.Synthetic)  # Synthetic board for testing
+    exp.hardware_setup(ElectrodeType.DRY, Boards.OpenBCI_Ganglion)
+    # exp.hardware_setup(ElectrodeType.DRY, Boards.Synthetic)  # Synthetic board for testing
 
     # Connect to board and prepare streaming session
     try:
